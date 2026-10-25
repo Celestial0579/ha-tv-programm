@@ -32,6 +32,12 @@
     "sensor": {
       "stand": {
         "name": "Programmstand"
+      },
+      "jetzt": {
+        "name": "Jetzt im TV"
+      },
+      "abend": {
+        "name": "Heute um 20:15"
       }
     },
     "button": {

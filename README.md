@@ -12,6 +12,8 @@ Automationen und für den Sprachassistenten („Was läuft gerade?“, „Was ko
 |---|---|
 | Aktion **`tv_programm.abfragen`** | Antwort je Sender mit laufender und folgender Sendung zum Zeitpunkt (Vorgabe: jetzt) – oder mit `suche` die nächsten Ausstrahlungen einer Sendung |
 | Sensor **Programmstand** | Zeitpunkt des letzten Ladens, Anzahl Sender/Sendungen, Programm bis, letzter Fehler |
+| Sensor **Jetzt im TV** | Zahl der Sender; Attribut `sender`: je Sender `titel`, `beginn`, `ende`, `danach`, `danach_beginn` – minütlich neu, nicht in der Datenbank |
+| Sensor **Heute um 20:15** | wie oben für 20:15 (bis 05:00 noch der vergangene Abend), Attribut `zeitpunkt` |
 | Knopf **Jetzt neu laden** | lädt die Programmdaten sofort |
 
 Felder der Aktion: `zeitpunkt` (z. B. `20:15` oder `2026-10-26T20:15`), `sender` (Liste, Groß-/Kleinschreibung und
@@ -40,3 +42,17 @@ search). Pick the channels to keep under *Configure*. Set up from the UI after i
 repository (type *Integration*).
 
 Lizenz / License: MIT
+
+### Dashboard-Beispiel (Markdown-Karte)
+
+```yaml
+type: markdown
+content: >-
+  | Sender | Jetzt | 20:15 |
+  |---|---|---|
+  {%- set abend = state_attr('sensor.tv_programm_heute_um_20_15', 'sender') or [] %}
+  {%- for z in state_attr('sensor.tv_programm_jetzt_im_tv', 'sender') or [] %}
+  {%- set a = abend | selectattr('sender', 'eq', z.sender) | first %}
+  | {{ z.sender }} | {{ z.titel | default('–') }} | {{ a.titel if a else '–' }} |
+  {%- endfor %}
+```

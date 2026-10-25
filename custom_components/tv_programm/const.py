@@ -25,5 +25,7 @@ SPITZNAMEN = {
     "kabel1": "kabeleins", "zdfneo": "zdfneo", "ntv": "ntv", "welt": "welt", "tele5": "tele5",
 }
 
+ABENDZEIT = (20, 15)
+
 DIENST_ABFRAGEN = "abfragen"
 MAX_TREFFER = 15

@@ -32,6 +32,12 @@
     "sensor": {
       "stand": {
         "name": "Guide updated"
+      },
+      "jetzt": {
+        "name": "On TV now"
+      },
+      "abend": {
+        "name": "Tonight at 20:15"
       }
     },
     "button": {

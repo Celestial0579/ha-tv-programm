@@ -47,6 +47,10 @@ def _sendung(eintrag: list[Any] | None) -> dict[str, Any] | None:
     return ergebnis
 
 
+def _uhr(zeitstempel: float) -> str:
+    return dt_util.as_local(dt_util.utc_from_timestamp(zeitstempel)).strftime("%H:%M")
+
+
 class Programm:
     """Eine Instanz je Eintrag."""
 
@@ -161,6 +165,24 @@ class Programm:
         if not ergebnis:
             raise HomeAssistantError(f"Keinen passenden Sender gefunden: {', '.join(wunsch)}")
         return ergebnis
+
+    def uebersicht(self, zeitpunkt: datetime) -> list[dict[str, Any]]:
+        """Knapp je Sender: was zum Zeitpunkt läuft und was danach kommt (für Sensoren und Dashboard)."""
+        zeit = zeitpunkt.timestamp()
+        liste = []
+        for name in (s for s in self.auswahl if s in self.programm):
+            eintraege = self.programm[name]
+            jetzt = next((e for e in eintraege if e[0] <= zeit < (e[1] or e[0] + 1)), None)
+            danach = next((e for e in eintraege if e[0] > zeit), None)
+            if not (jetzt or danach):
+                continue
+            zeile: dict[str, Any] = {"sender": name}
+            if jetzt:
+                zeile.update(titel=jetzt[2], beginn=_uhr(jetzt[0]), ende=_uhr(jetzt[1]) if jetzt[1] else None)
+            if danach:
+                zeile.update(danach=danach[2], danach_beginn=_uhr(danach[0]))
+            liste.append(zeile)
+        return liste
 
     def abfragen(self, zeitpunkt: datetime | None, sender: list[str] | None, suche: str | None) -> dict[str, Any]:
         if not self.programm:

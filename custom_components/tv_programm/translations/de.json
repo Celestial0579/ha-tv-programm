@@ -1,0 +1,63 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "TV-Programm einrichten",
+        "description": "Lädt einmal täglich Programmdaten im XMLTV-Format. Vorgabe ist die deutsche Datei von iptv-epg.org (rund 45 MB). Welche Sender gespeichert werden, wählst du danach unter „Konfigurieren“.",
+        "data": {
+          "url": "Adresse der XMLTV-Datei",
+          "uhrzeit": "Täglich laden um"
+        }
+      }
+    },
+    "error": {
+      "ungueltige_adresse": "Die Adresse muss mit http:// oder https:// beginnen."
+    },
+    "abort": {
+      "already_configured": "Diese Quelle ist schon eingerichtet."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Sender",
+        "description": "Nur diese Sender werden gespeichert und abgefragt. Die Liste füllt sich nach dem ersten Laden.",
+        "data": {
+          "sender": "Sender"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "stand": {
+        "name": "Programmstand"
+      }
+    },
+    "button": {
+      "aktualisieren": {
+        "name": "Jetzt neu laden"
+      }
+    }
+  },
+  "services": {
+    "abfragen": {
+      "name": "Programm abfragen",
+      "description": "Was läuft jetzt oder zu einem Zeitpunkt (je Sender laufende und folgende Sendung), oder wann läuft eine Sendung (Suche).",
+      "fields": {
+        "zeitpunkt": {
+          "name": "Zeitpunkt",
+          "description": "Uhrzeit (20:15) oder Datum mit Uhrzeit (2026-10-26T20:15); leer = jetzt."
+        },
+        "sender": {
+          "name": "Sender",
+          "description": "Nur diese Sender; leer = alle ausgewählten."
+        },
+        "suche": {
+          "name": "Suche",
+          "description": "Titel oder Teil davon; liefert die nächsten Ausstrahlungen."
+        }
+      }
+    }
+  }
+}

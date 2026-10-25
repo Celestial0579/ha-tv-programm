@@ -1,0 +1,15 @@
+abfragen:
+  fields:
+    zeitpunkt:
+      example: "20:15"
+      selector:
+        text:
+    sender:
+      example: "ZDF"
+      selector:
+        text:
+          multiple: true
+    suche:
+      example: "Tatort"
+      selector:
+        text:

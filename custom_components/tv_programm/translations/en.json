@@ -1,0 +1,63 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up TV guide",
+        "description": "Downloads programme data in XMLTV format once a day. The default is the German file from iptv-epg.org (about 45 MB). Choose which channels are kept under “Configure” afterwards.",
+        "data": {
+          "url": "XMLTV file address",
+          "uhrzeit": "Download daily at"
+        }
+      }
+    },
+    "error": {
+      "ungueltige_adresse": "The address must start with http:// or https://."
+    },
+    "abort": {
+      "already_configured": "This source is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Channels",
+        "description": "Only these channels are kept and queried. The list fills after the first download.",
+        "data": {
+          "sender": "Channels"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "stand": {
+        "name": "Guide updated"
+      }
+    },
+    "button": {
+      "aktualisieren": {
+        "name": "Reload now"
+      }
+    }
+  },
+  "services": {
+    "abfragen": {
+      "name": "Query guide",
+      "description": "What is on now or at a given time (current and next show per channel), or when a show airs (search).",
+      "fields": {
+        "zeitpunkt": {
+          "name": "Time",
+          "description": "Time (20:15) or date and time (2026-10-26T20:15); empty = now."
+        },
+        "sender": {
+          "name": "Channels",
+          "description": "Only these channels; empty = all selected."
+        },
+        "suche": {
+          "name": "Search",
+          "description": "Title or part of it; returns the next airings."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "domain": "tv_programm",
+  "name": "TV-Programm",
+  "codeowners": ["@Celestial0579"],
+  "config_flow": true,
+  "documentation": "https://github.com/Celestial0579/ha-tv-programm",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/Celestial0579/ha-tv-programm/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}

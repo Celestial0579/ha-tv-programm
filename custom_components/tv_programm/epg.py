@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import datetime
+import gzip
 import os
 import re
 from typing import Any
@@ -10,11 +12,16 @@ import xml.etree.ElementTree as ET
 
 import aiohttp
 
-USER_AGENT = "HomeAssistant-tv_programm/0.1 (+https://github.com/Celestial0579/ha-tv-programm)"
+USER_AGENT = "HomeAssistant-tv_programm/0.3 (+https://github.com/Celestial0579/ha-tv-programm)"
 
 
 class EpgFehler(Exception):
     """Programmdaten nicht ladbar oder unbrauchbar."""
+
+
+def norm(text: str) -> str:
+    """Vergleichsform eines Sendernamens: „Kabel Eins“, „kabel eins“ und „KABEL-EINS“ sind gleich."""
+    return "".join(z for z in text.lower() if z.isalnum())
 
 
 def anzeigename(roh: str) -> str:
@@ -53,33 +60,40 @@ async def herunterladen(sitzung: aiohttp.ClientSession, url: str, ziel: str) -> 
     return groesse
 
 
-def auswerten(pfad: str, auswahl: list[str] | None) -> dict[str, Any]:
-    """XMLTV-Datei lesen (blockierend). Gibt alle Sendernamen und das Programm der ausgewählten Sender zurück."""
+def auswerten(pfad: str, auswahl: Iterable[str] | None) -> dict[str, Any]:
+    """XMLTV-Datei lesen (blockierend, auch gzip-gepackt).
+
+    Gibt alle Sendernamen zurück, aber das Programm nur der ausgewählten Sender (Vergleich über norm()) –
+    so bleibt auch eine große Datei im Speicher klein.
+    """
     kanaele: dict[str, str] = {}
     programm: dict[str, list[list[Any]]] = {}
-    gewuenscht = {s.lower() for s in auswahl} if auswahl else None
+    gewuenscht = {norm(s) for s in auswahl} if auswahl is not None else None
+    with open(pfad, "rb") as probe:
+        gepackt = probe.read(2) == b"\x1f\x8b"
     try:
-        for _ereignis, element in ET.iterparse(pfad, events=("end",)):
-            if element.tag == "channel":
-                kanaele[element.get("id") or ""] = anzeigename(element.findtext("display-name") or "")
-                element.clear()
-            elif element.tag == "programme":
-                name = kanaele.get(element.get("channel") or "")
-                if name and (gewuenscht is None or name.lower() in gewuenscht):
-                    start, ende = _zeit(element.get("start")), _zeit(element.get("stop"))
-                    if start is not None:
-                        programm.setdefault(name, []).append(
-                            [
-                                start,
-                                ende,
-                                (element.findtext("title") or "").strip(),
-                                (element.findtext("sub-title") or "").strip(),
-                                re.sub(r"\s+", " ", (element.findtext("desc") or "").strip())[:300],
-                                (element.findtext("category") or "").strip(),
-                            ]
-                        )
-                element.clear()
-    except ET.ParseError as err:
+        with (gzip.open(pfad, "rb") if gepackt else open(pfad, "rb")) as datei:
+            for _ereignis, element in ET.iterparse(datei, events=("end",)):
+                if element.tag == "channel":
+                    kanaele[element.get("id") or ""] = anzeigename(element.findtext("display-name") or "")
+                    element.clear()
+                elif element.tag == "programme":
+                    name = kanaele.get(element.get("channel") or "")
+                    if name and (gewuenscht is None or norm(name) in gewuenscht):
+                        start, ende = _zeit(element.get("start")), _zeit(element.get("stop"))
+                        if start is not None:
+                            programm.setdefault(name, []).append(
+                                [
+                                    start,
+                                    ende,
+                                    (element.findtext("title") or "").strip(),
+                                    (element.findtext("sub-title") or "").strip(),
+                                    re.sub(r"\s+", " ", (element.findtext("desc") or "").strip())[:300],
+                                    (element.findtext("category") or "").strip(),
+                                ]
+                            )
+                    element.clear()
+    except (ET.ParseError, OSError, EOFError) as err:
         raise EpgFehler(f"Datei ist kein gültiges XMLTV: {err}") from err
     if not kanaele:
         raise EpgFehler("Datei enthält keine Sender")

@@ -2,11 +2,17 @@
 
 DOMAIN = "tv_programm"
 
-CONF_URL = "url"
+CONF_URL = "url"  # Hauptquelle
+CONF_URL_ERSATZ = "url_ersatz"  # nur für Sender, die in der Hauptquelle fehlen
 CONF_UHRZEIT = "uhrzeit"
 CONF_SENDER = "sender"
 
-DEFAULT_URL = "https://iptv-epg.org/files/epg-de.xml"
+# Hauptquelle: Zeiten korrekt, gepackt ~4 MB, aber ohne dritte Programme (NDR …)
+DEFAULT_URL = "https://epgshare01.online/epgshare01/epg_ripper_DE1.xml.gz"
+# Ersatzquelle: hat auch die dritten Programme, ~45 MB; nach der Zeitumstellung 25.10.2026 bei ZDF, SAT.1, VOX,
+# RTLZWEI und ARTE eine Stunde zu früh – deshalb nur noch für Sender, die der Hauptquelle fehlen
+DEFAULT_URL_ERSATZ = "https://iptv-epg.org/files/epg-de.xml"
+ALTE_URL = DEFAULT_URL_ERSATZ  # Vorgabe bis v0.2.0
 DEFAULT_UHRZEIT = "04:00:00"
 
 # Vorgabe-Auswahl (Anzeigenamen ohne Länderpräfix); nur vorhandene werden übernommen

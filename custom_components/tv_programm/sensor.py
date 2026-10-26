@@ -40,6 +40,7 @@ class StandSensor(ProgrammEntitaet, SensorEntity):
             "sender": len(self._programm.programm),
             "sendungen": self._programm.sendungen,
             "programm_bis": bis.isoformat() if bis else None,
+            "aus_ersatzquelle": self._programm.aus_ersatz,
             "fehler": self._programm.fehler,
         }
 

@@ -3,10 +3,15 @@
     "step": {
       "user": {
         "title": "TV-Programm einrichten",
-        "description": "Lädt einmal täglich Programmdaten im XMLTV-Format. Vorgabe ist die deutsche Datei von iptv-epg.org (rund 45 MB). Welche Sender gespeichert werden, wählst du danach unter „Konfigurieren“.",
+        "description": "Lädt einmal täglich Programmdaten im XMLTV-Format (auch gzip-gepackt). Die Hauptquelle liefert die Zeiten; aus der Ersatzquelle werden nur Sender gelesen, die in der Hauptquelle fehlen – etwa die dritten Programme. Welche Sender gespeichert werden, wählst du danach unter „Konfigurieren“.",
         "data": {
-          "url": "Adresse der XMLTV-Datei",
+          "url": "Hauptquelle",
+          "url_ersatz": "Ersatzquelle",
           "uhrzeit": "Täglich laden um"
+        },
+        "data_description": {
+          "url": "Adresse der XMLTV-Datei; Vorgabe epgshare01 (rund 4 MB, Zeiten korrekt, ohne dritte Programme)",
+          "url_ersatz": "Nur für Sender, die der Hauptquelle fehlen; fällt die Hauptquelle aus, kommt alles von hier. Leer = keine. Vorgabe iptv-epg.org (rund 45 MB, wird nur bei Bedarf geladen)"
         }
       }
     },
@@ -20,12 +25,21 @@
   "options": {
     "step": {
       "init": {
-        "title": "Sender",
-        "description": "Nur diese Sender werden gespeichert und abgefragt. Die Liste füllt sich nach dem ersten Laden.",
+        "title": "Quellen und Sender",
+        "description": "Nur die gewählten Sender werden gespeichert und abgefragt. Die Liste enthält die Sender beider Quellen und füllt sich nach dem ersten Laden.",
         "data": {
+          "url": "Hauptquelle",
+          "url_ersatz": "Ersatzquelle",
           "sender": "Sender"
+        },
+        "data_description": {
+          "url": "Adresse der XMLTV-Datei; Vorgabe epgshare01 (rund 4 MB, Zeiten korrekt, ohne dritte Programme)",
+          "url_ersatz": "Nur für Sender, die der Hauptquelle fehlen; fällt die Hauptquelle aus, kommt alles von hier. Leer = keine. Vorgabe iptv-epg.org (rund 45 MB, wird nur bei Bedarf geladen)"
         }
       }
+    },
+    "error": {
+      "ungueltige_adresse": "Die Adresse muss mit http:// oder https:// beginnen."
     }
   },
   "entity": {

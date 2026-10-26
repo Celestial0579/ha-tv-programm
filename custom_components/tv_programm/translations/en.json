@@ -3,10 +3,15 @@
     "step": {
       "user": {
         "title": "Set up TV guide",
-        "description": "Downloads programme data in XMLTV format once a day. The default is the German file from iptv-epg.org (about 45 MB). Choose which channels are kept under “Configure” afterwards.",
+        "description": "Loads programme data in XMLTV format once a day (gzip supported). The main source provides the times; from the fallback source only channels missing in the main source are read, e.g. regional channels. Choose the channels afterwards under “Configure”.",
         "data": {
-          "url": "XMLTV file address",
-          "uhrzeit": "Download daily at"
+          "url": "Main source",
+          "url_ersatz": "Fallback source",
+          "uhrzeit": "Load daily at"
+        },
+        "data_description": {
+          "url": "Address of the XMLTV file; default epgshare01 (about 4 MB, correct times, no regional channels)",
+          "url_ersatz": "Only for channels missing in the main source; if the main source fails, everything comes from here. Empty = none. Default iptv-epg.org (about 45 MB, only loaded when needed)"
         }
       }
     },
@@ -20,12 +25,21 @@
   "options": {
     "step": {
       "init": {
-        "title": "Channels",
-        "description": "Only these channels are kept and queried. The list fills after the first download.",
+        "title": "Sources and channels",
+        "description": "Only the selected channels are stored and queried. The list contains the channels of both sources and fills after the first load.",
         "data": {
+          "url": "Main source",
+          "url_ersatz": "Fallback source",
           "sender": "Channels"
+        },
+        "data_description": {
+          "url": "Address of the XMLTV file; default epgshare01 (about 4 MB, correct times, no regional channels)",
+          "url_ersatz": "Only for channels missing in the main source; if the main source fails, everything comes from here. Empty = none. Default iptv-epg.org (about 45 MB, only loaded when needed)"
         }
       }
+    },
+    "error": {
+      "ungueltige_adresse": "The address must start with http:// or https://."
     }
   },
   "entity": {

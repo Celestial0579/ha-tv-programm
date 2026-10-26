@@ -17,11 +17,21 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from . import epg
-from .const import CONF_SENDER, CONF_UHRZEIT, CONF_URL, DEFAULT_UHRZEIT, DOMAIN, MAX_TREFFER, SPITZNAMEN, STANDARD_SENDER
+from .const import (
+    CONF_SENDER,
+    CONF_UHRZEIT,
+    CONF_URL,
+    CONF_URL_ERSATZ,
+    DEFAULT_UHRZEIT,
+    DEFAULT_URL,
+    DOMAIN,
+    MAX_TREFFER,
+    SPITZNAMEN,
+    STANDARD_SENDER,
+)
 
 _LOGGER = logging.getLogger(__name__)
-def _norm(text: str) -> str:
-    return "".join(z for z in text.lower() if z.isalnum())
+_norm = epg.norm
 
 
 WOCHENTAGE = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
@@ -58,25 +68,40 @@ class Programm:
         self.hass = hass
         self.entry = entry
         self.alle_sender: list[str] = []
+        self.alle_ersatz: list[str] = []  # zuletzt bekannte Sender der Ersatzquelle, für die Auswahl
+        self.aus_ersatz: list[str] = []  # Sender, deren Programm gerade aus der Ersatzquelle stammt
         self.programm: dict[str, list[list[Any]]] = {}
         self.stand: datetime | None = None
         self.fehler: str | None = None
         self._store: Store[dict[str, Any]] = Store(hass, 1, f"{DOMAIN}.{entry.entry_id}")
         self._datei = hass.config.path(".storage", f"{DOMAIN}.{entry.entry_id}.xml")
+        self._datei_ersatz = hass.config.path(".storage", f"{DOMAIN}.{entry.entry_id}.ersatz.xml")
         self._zuhoerer: list[Callable[[], None]] = []
         self._abmelden: list[CALLBACK_TYPE] = []
         self._laeuft = False
 
     # ------------------------------------------------------------ Einstellungen
     @property
+    def haupt_url(self) -> str:
+        return str(self.entry.options.get(CONF_URL) or self.entry.data.get(CONF_URL) or DEFAULT_URL)
+
+    @property
+    def ersatz_url(self) -> str:
+        if CONF_URL_ERSATZ in self.entry.options:
+            return str(self.entry.options[CONF_URL_ERSATZ] or "")
+        return str(self.entry.data.get(CONF_URL_ERSATZ) or "")
+
+    @property
+    def wunsch(self) -> list[str]:
+        return list(self.entry.options.get(CONF_SENDER) or STANDARD_SENDER)
+
+    @property
     def auswahl(self) -> list[str]:
-        gewaehlt = self.entry.options.get(CONF_SENDER)
-        if gewaehlt:
-            return list(gewaehlt)
-        if self.alle_sender:
-            vorhanden = {_norm(s): s for s in self.alle_sender}
-            return [vorhanden[_norm(s)] for s in STANDARD_SENDER if _norm(s) in vorhanden]
-        return list(STANDARD_SENDER)
+        """Gewünschte Sender in der Schreibweise der Quelle, aus der sie kommen (Vergleich über _norm)."""
+        if not self.alle_sender:
+            return self.wunsch
+        vorhanden = {_norm(s): s for s in self.alle_sender}
+        return [vorhanden[_norm(s)] for s in self.wunsch if _norm(s) in vorhanden]
 
     @property
     def sendungen(self) -> int:
@@ -100,6 +125,8 @@ class Programm:
     async def async_start(self) -> None:
         daten = await self._store.async_load() or {}
         self.alle_sender = daten.get("alle_sender", [])
+        self.alle_ersatz = daten.get("alle_ersatz", [])
+        self.aus_ersatz = daten.get("aus_ersatz", [])
         self.programm = daten.get("programm", {})
         if daten.get("stand"):
             self.stand = dt_util.parse_datetime(daten["stand"])
@@ -108,7 +135,8 @@ class Programm:
             async_track_time_change(self.hass, self._taeglich, hour=stunde, minute=minute, second=0)
         )
         veraltet = self.stand is None or dt_util.utcnow() - self.stand > timedelta(hours=20)
-        if veraltet or set(self.auswahl) - set(self.programm):
+        quelle_neu = daten.get("quellen") != [self.haupt_url, self.ersatz_url]
+        if veraltet or quelle_neu or set(self.auswahl) - set(self.programm):
             self.hass.async_create_background_task(self.async_aktualisieren(), f"{DOMAIN}_start")
 
     async def async_stop(self) -> None:
@@ -124,27 +152,63 @@ class Programm:
             return
         self._laeuft = True
         try:
-            groesse = await epg.herunterladen(async_get_clientsession(self.hass), self.entry.data[CONF_URL], self._datei)
-            daten = await self.hass.async_add_executor_job(epg.auswerten, self._datei, None)
-            self.alle_sender = daten["alle_sender"]
-            auswahl = {_norm(s) for s in self.auswahl}
-            self.programm = {k: v for k, v in daten["programm"].items() if _norm(k) in auswahl}
-            self.stand = dt_util.utcnow()
-            self.fehler = None
-            _LOGGER.info("Programm geladen: %d MB, %d Sender, %d Sendungen", groesse // 1_000_000, len(self.programm), self.sendungen)
-            await self._store.async_save(
-                {"alle_sender": self.alle_sender, "programm": self.programm, "stand": self.stand.isoformat()}
-            )
-        except epg.EpgFehler as err:
-            self.fehler = str(err)[:200]
-            _LOGGER.warning("Programmdaten nicht geladen: %s", err)
+            await self._laden()
         finally:
             self._laeuft = False
             await self.hass.async_add_executor_job(self._datei_weg)
             self._melden()
 
+    async def _quelle(self, url: str, datei: str, auswahl: list[str]) -> dict[str, Any]:
+        groesse = await epg.herunterladen(async_get_clientsession(self.hass), url, datei)
+        daten = await self.hass.async_add_executor_job(epg.auswerten, datei, auswahl)
+        _LOGGER.info("%s: %d MB, %d von %d gewünschten Sendern", url, groesse // 1_000_000, len(daten["programm"]), len(auswahl))
+        return daten
+
+    async def _laden(self) -> None:
+        """Hauptquelle zuerst; aus der Ersatzquelle nur die Sender, die der Hauptquelle fehlen.
+
+        Fällt die Hauptquelle aus, fehlen ihr alle Sender – dann liefert die Ersatzquelle alles.
+        Liefern beide nichts, bleibt das bisherige Programm stehen.
+        """
+        wunsch = self.wunsch
+        fehler: list[str] = []
+        try:
+            haupt = await self._quelle(self.haupt_url, self._datei, wunsch)
+        except epg.EpgFehler as err:
+            fehler.append(f"Hauptquelle: {err}")
+            haupt = {"alle_sender": [], "programm": {}}
+        gefunden = {_norm(k) for k in haupt["programm"]}
+        fehlend = [s for s in wunsch if _norm(s) not in gefunden]
+        ersatz: dict[str, Any] = {"alle_sender": [], "programm": {}}
+        if fehlend and self.ersatz_url:
+            try:
+                ersatz = await self._quelle(self.ersatz_url, self._datei_ersatz, fehlend)
+                self.alle_ersatz = ersatz["alle_sender"]
+            except epg.EpgFehler as err:
+                fehler.append(f"Ersatzquelle: {err}")
+        if not haupt["programm"] and not ersatz["programm"]:
+            self.fehler = "; ".join(fehler)[:200] or "Keine Sendungen der gewählten Sender gefunden"
+            _LOGGER.warning("Programmdaten nicht geladen: %s", self.fehler)
+            return
+        haupt_norm = {_norm(s) for s in haupt["alle_sender"]}
+        self.alle_sender = sorted(
+            set(haupt["alle_sender"]) | {s for s in (ersatz["alle_sender"] or self.alle_ersatz) if _norm(s) not in haupt_norm},
+            key=str.lower,
+        )
+        self.programm = {**haupt["programm"], **ersatz["programm"]}
+        self.aus_ersatz = sorted(ersatz["programm"])
+        self.stand = dt_util.utcnow()
+        self.fehler = "; ".join(fehler)[:200] or None
+        _LOGGER.info("Programm: %d Sender (%d aus der Ersatzquelle), %d Sendungen", len(self.programm), len(self.aus_ersatz), self.sendungen)
+        await self._store.async_save(
+            {
+                "alle_sender": self.alle_sender, "alle_ersatz": self.alle_ersatz, "aus_ersatz": self.aus_ersatz,
+                "programm": self.programm, "stand": self.stand.isoformat(), "quellen": [self.haupt_url, self.ersatz_url],
+            }
+        )
+
     def _datei_weg(self) -> None:
-        for pfad in (self._datei, self._datei + ".teil"):
+        for pfad in (self._datei, self._datei + ".teil", self._datei_ersatz, self._datei_ersatz + ".teil"):
             if os.path.exists(pfad):
                 os.remove(pfad)
 

@@ -12,7 +12,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.util import dt as dt_util
 
-from .const import DIENST_ABFRAGEN, DOMAIN
+from .const import ALTE_URL, CONF_URL, CONF_URL_ERSATZ, DEFAULT_URL, DIENST_ABFRAGEN, DOMAIN
 from .programm import Programm
 
 PLATFORMS = [Platform.BUTTON, Platform.SENSOR]
@@ -50,6 +50,18 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     hass.services.async_register(
         DOMAIN, DIENST_ABFRAGEN, abfragen, schema=ABFRAGEN_SCHEMA, supports_response=SupportsResponse.ONLY
     )
+    return True
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """v1 -> v2: Ersatzquelle. Wer die alte Vorgabe nutzte, bekommt die neue Hauptquelle und die alte als Ersatz."""
+    if entry.version == 1:
+        daten = dict(entry.data)
+        if daten.get(CONF_URL) == ALTE_URL:
+            daten[CONF_URL], daten[CONF_URL_ERSATZ] = DEFAULT_URL, ALTE_URL
+        else:
+            daten.setdefault(CONF_URL_ERSATZ, "")
+        hass.config_entries.async_update_entry(entry, data=daten, version=2)
     return True
 
 

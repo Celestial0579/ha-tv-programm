@@ -21,6 +21,7 @@ from pathlib import Path
 import re
 from typing import Any
 from xml.parsers import expat
+import zlib
 
 import aiohttp
 
@@ -230,7 +231,7 @@ def auswerten(pfad: str, auswahl: Iterable[str] | None, grenze: int = MAX_ENTPAC
                 if gelesen - letztes[0] > MAX_TOKEN:
                     raise EpgFehler(f"Datei enthält ein Token über {MAX_TOKEN // 1_000_000} MB")
             parser.Parse(b"", True)
-    except (expat.ExpatError, OSError, EOFError) as err:
+    except (expat.ExpatError, OSError, EOFError, zlib.error) as err:  # zlib.error: beschädigtes gzip
         raise EpgFehler(f"Datei ist kein gültiges XMLTV: {str(err)[:100]}") from err
     if not leser.kanaele:
         raise EpgFehler("Datei enthält keine Sender")

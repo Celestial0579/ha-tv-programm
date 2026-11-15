@@ -66,6 +66,17 @@ def test_kaputte_dateien(tmp_path: Path) -> None:
         epg.auswerten(_datei(tmp_path / "b.xml", KOPF + "</tv>"), None)
 
 
+def test_beschaedigtes_gzip_wird_epgfehler(tmp_path: Path) -> None:
+    """#10: zlib.error ist weder OSError noch EOFError."""
+    gepackt = bytearray(gzip.compress((KOPF + _sender("a", "A") * 2000 + "</tv>").encode()))
+    for stelle in range(20, len(gepackt) - 20, 7):
+        gepackt[stelle] ^= 0xFF
+    pfad = tmp_path / "kaputt.xml.gz"
+    pfad.write_bytes(bytes(gepackt))
+    with pytest.raises(epg.EpgFehler):
+        epg.auswerten(str(pfad), None)
+
+
 def test_eigene_entitaeten_werden_abgelehnt(tmp_path: Path) -> None:
     bombe = '<?xml version="1.0"?><!DOCTYPE tv [<!ENTITY a "aaaaaaaaaa"><!ENTITY b "&a;&a;&a;&a;">]><tv><channel id="x"><display-name>&b;</display-name></channel></tv>'
     with pytest.raises(epg.EpgFehler, match="Entitäten"):

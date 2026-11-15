@@ -27,7 +27,7 @@ SPITZNAMEN = {
     "ard": "daserste", "erste": "daserste", "ersten": "daserste", "daserste": "daserste",
     "zweite": "zdf", "zweiten": "zdf", "daszweite": "zdf",
     "dritte": "ndrfernsehenniedersachsen", "dritten": "ndrfernsehenniedersachsen", "ndr": "ndrfernsehenniedersachsen",
-    "pro7": "prosieben", "pro7maxx": "prosiebenmaxx", "sat1": "sat1", "rtl2": "rtlzwei", "rtl2": "rtlzwei",
+    "pro7": "prosieben", "pro7maxx": "prosiebenmaxx", "sat1": "sat1", "rtl2": "rtlzwei",
     "kabel1": "kabeleins", "zdfneo": "zdfneo", "ntv": "ntv", "welt": "welt", "tele5": "tele5",
 }
 

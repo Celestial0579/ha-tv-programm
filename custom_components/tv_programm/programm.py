@@ -6,6 +6,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 import logging
 import os
+import time
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -79,6 +80,7 @@ class Programm:
         self._zuhoerer: list[Callable[[], None]] = []
         self._abmelden: list[CALLBACK_TYPE] = []
         self._laeuft = False
+        self._gespeichert: dict[str, Any] = {}
 
     # ------------------------------------------------------------ Einstellungen
     @property
@@ -103,6 +105,15 @@ class Programm:
         vorhanden = {_norm(s): s for s in self.alle_sender}
         return [vorhanden[_norm(s)] for s in self.wunsch if _norm(s) in vorhanden]
 
+    def gewaehlt(self) -> list[str]:
+        """Gewählte Sender mit Programm, in der Schreibweise des Programms (Vergleich über _norm)."""
+        im_programm = {_norm(k): k for k in self.programm}
+        ergebnis: list[str] = []
+        for s in self.auswahl:
+            if (name := im_programm.get(_norm(s))) is not None and name not in ergebnis:
+                ergebnis.append(name)
+        return ergebnis
+
     @property
     def sendungen(self) -> int:
         return sum(len(e) for e in self.programm.values())
@@ -124,6 +135,7 @@ class Programm:
     # ------------------------------------------------------------ Lebenszyklus
     async def async_start(self) -> None:
         daten = await self._store.async_load() or {}
+        self._gespeichert = daten
         self.alle_sender = daten.get("alle_sender", [])
         self.alle_ersatz = daten.get("alle_ersatz", [])
         self.aus_ersatz = daten.get("aus_ersatz", [])
@@ -134,10 +146,21 @@ class Programm:
         self._abmelden.append(
             async_track_time_change(self.hass, self._taeglich, hour=stunde, minute=minute, second=0)
         )
+        if self.beim_start_laden(daten):
+            self.hass.async_create_background_task(self.async_aktualisieren(), f"{DOMAIN}_start")
+
+    def beim_start_laden(self, daten: dict[str, Any]) -> bool:
+        """Nur laden, wenn es nötig ist: alt, andere Quelle oder neu gewünschte Sender.
+
+        Ein Sender, der in der Quelle ohne Programm steht, ist kein Grund: Er hätte auch
+        beim nächsten Laden keins. Nach einem Fehlschlag frühestens nach einer Stunde.
+        """
         veraltet = self.stand is None or dt_util.utcnow() - self.stand > timedelta(hours=20)
         quelle_neu = daten.get("quellen") != [self.haupt_url, self.ersatz_url]
-        if veraltet or quelle_neu or set(self.auswahl) - set(self.programm):
-            self.hass.async_create_background_task(self.async_aktualisieren(), f"{DOMAIN}_start")
+        vorher = {_norm(w) for w in daten.get("wunsch", self.wunsch)}
+        neu_gewuenscht = bool({_norm(w) for w in self.wunsch} - vorher)
+        zu_frueh = time.time() - float(daten.get("versuch") or 0) < 3600
+        return quelle_neu or neu_gewuenscht or (veraltet and not zu_frueh)
 
     async def async_stop(self) -> None:
         for abmelden in self._abmelden:
@@ -189,6 +212,8 @@ class Programm:
         if not haupt["programm"] and not ersatz["programm"]:
             self.fehler = "; ".join(fehler)[:200] or "Keine Sendungen der gewählten Sender gefunden"
             _LOGGER.warning("Programmdaten nicht geladen: %s", self.fehler)
+            # Den Versuch merken, damit nicht jeder Neustart sofort wieder lädt.
+            await self._store.async_save({**self._gespeichert, "versuch": time.time(), "quellen": [self.haupt_url, self.ersatz_url], "wunsch": wunsch})
             return
         haupt_norm = {_norm(s) for s in haupt["alle_sender"]}
         self.alle_sender = sorted(
@@ -200,12 +225,12 @@ class Programm:
         self.stand = dt_util.utcnow()
         self.fehler = "; ".join(fehler)[:200] or None
         _LOGGER.info("Programm: %d Sender (%d aus der Ersatzquelle), %d Sendungen", len(self.programm), len(self.aus_ersatz), self.sendungen)
-        await self._store.async_save(
-            {
-                "alle_sender": self.alle_sender, "alle_ersatz": self.alle_ersatz, "aus_ersatz": self.aus_ersatz,
-                "programm": self.programm, "stand": self.stand.isoformat(), "quellen": [self.haupt_url, self.ersatz_url],
-            }
-        )
+        self._gespeichert = {
+            "alle_sender": self.alle_sender, "alle_ersatz": self.alle_ersatz, "aus_ersatz": self.aus_ersatz,
+            "programm": self.programm, "stand": self.stand.isoformat(), "quellen": [self.haupt_url, self.ersatz_url],
+            "wunsch": wunsch, "versuch": time.time(),
+        }
+        await self._store.async_save(self._gespeichert)
 
     def _datei_weg(self) -> None:
         for pfad in (self._datei, self._datei + ".teil", self._datei_ersatz, self._datei_ersatz + ".teil"):
@@ -215,7 +240,7 @@ class Programm:
     # ------------------------------------------------------------ Abfragen
     def _sender_waehlen(self, wunsch: list[str] | None) -> list[str]:
         if not wunsch:
-            return [s for s in self.auswahl if s in self.programm]
+            return self.gewaehlt()
         ergebnis = []
         for teil in wunsch:
             t = _norm(teil)
@@ -234,7 +259,7 @@ class Programm:
         """Knapp je Sender: was zum Zeitpunkt läuft und was danach kommt (für Sensoren und Dashboard)."""
         zeit = zeitpunkt.timestamp()
         liste = []
-        for name in (s for s in self.auswahl if s in self.programm):
+        for name in self.gewaehlt():
             eintraege = self.programm[name]
             jetzt = next((e for e in eintraege if e[0] <= zeit < (e[1] or e[0] + 1)), None)
             danach = next((e for e in eintraege if e[0] > zeit), None)

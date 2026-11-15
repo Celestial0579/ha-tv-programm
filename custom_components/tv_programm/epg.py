@@ -4,7 +4,7 @@ Schutzmodell: Die XMLTV-Datei kommt von einer fremden Adresse (Gemeinschaftsange
 unbekannten Betreibern, eigene Adressen auch über http://). Ihr Inhalt ist fremde Eingabe.
 Wer eine Quelle kontrolliert, soll Home Assistant weder den Datenträger füllen noch den
 Speicher sprengen können. Deshalb ist alles begrenzt: die heruntergeladene Menge, die
-entpackte Menge, die Länge jedes Texts und jedes einzelnen Tokens der Auszeichnung, die Zahl der Sender, die Sendungen je Sender (alle
+entpackte Menge, die Länge jedes Texts und jedes einzelnen Tokens der Auszeichnung, die Tiefe der Verschachtelung, die Zahl der Sender, die Sendungen je Sender (alle
 Schreibweisen zusammen) und die Sendungen insgesamt. Gelesen wird ohne
 Baum (expat direkt), Dokumente mit eigenen Entitäten werden abgelehnt.
 """
@@ -34,6 +34,7 @@ MAX_SENDUNGEN = 5000  # je Sender (alle Schreibweisen zusammen); fünf Tage habe
 MAX_SENDER = 5000  # Sender in einer Datei; die großen Sammelquellen haben einige Hundert
 MAX_GESAMT = 50_000  # gespeicherte Sendungen insgesamt
 MAX_TOKEN = 1_000_000  # Byte, die expat ohne Ereignis puffern darf (ein Tag, ein Attributwert, ein Name)
+MAX_TIEFE = 8  # Verschachtelung; XMLTV kommt mit 3 Ebenen aus (tv > programme > title)
 LAENGEN = {"title": 200, "sub-title": 200, "desc": 300, "category": 100, "display-name": 100}
 _STUECK = 1 << 16
 
@@ -130,8 +131,14 @@ class _Leser:
         self._feld: str | None = None
         self._text: list[str] = []
         self._laenge = 0
+        self._tiefe = 0
 
     def start(self, name: str, attr: dict[str, str]) -> None:
+        # Jedes offene Element kostet expat Speicher, und jedes Start-Tag ist ein Ereignis,
+        # MAX_TOKEN greift also nicht: Die Tiefe selbst begrenzen (GHSA-m8r3-c533-2xfq).
+        self._tiefe += 1
+        if self._tiefe > MAX_TIEFE:
+            raise EpgFehler(f"Datei ist tiefer als {MAX_TIEFE} Ebenen verschachtelt")
         if name in ("channel", "programme"):
             self._art, self._attr, self._felder, self._feld = name, attr, {}, None
             return
@@ -146,6 +153,7 @@ class _Leser:
             self._laenge += len(stueck)
 
     def ende(self, name: str) -> None:
+        self._tiefe -= 1
         if self._feld is not None and name == self._feld:
             text = re.sub(r"\s+", " ", "".join(self._text)).strip()
             self._felder[name] = text[: LAENGEN[name]]

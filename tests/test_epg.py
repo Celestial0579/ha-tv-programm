@@ -142,6 +142,24 @@ def test_langer_text_und_kommentar_unter_der_grenze(tmp_path: Path) -> None:
     assert len(daten["programm"]["A"][0][4]) == epg.LAENGEN["desc"]
 
 
+def test_tiefe_verschachtelung_bricht_ab(tmp_path: Path) -> None:
+    """GHSA-m8r3-c533-2xfq: jedes Start-Tag ist ein Ereignis, MAX_TOKEN greift nicht; expat hält jede Ebene."""
+    pfad = _datei(tmp_path / "tief.xml.gz", KOPF + _sender("a", "A") + "<a>" * 2_000_000 + "</tv>", gepackt=True)
+    assert Path(pfad).stat().st_size < 100_000
+    tracemalloc.start()
+    with pytest.raises(epg.EpgFehler, match="tiefer als"):
+        epg.auswerten(pfad, None)
+    _jetzt, spitze = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    assert spitze < 2_000_000
+
+
+def test_normale_tiefe_geht_durch(tmp_path: Path) -> None:
+    extra = "<credits><actor>A</actor></credits><rating><value>12</value></rating>"
+    inhalt = KOPF + _sender("a", "A") + _sendung("a", "20261112201500", "T", extra) + "</tv>"
+    assert epg.auswerten(_datei(tmp_path / "a.xml", inhalt), ["A"])["programm"]["A"][0][2] == "T"
+
+
 def test_langer_kommentar_ist_ein_token(tmp_path: Path) -> None:
     inhalt = KOPF + _sender("a", "A") + "<!--" + "k" * (2 * epg.MAX_TOKEN) + "--></tv>"
     with pytest.raises(epg.EpgFehler, match="Token über"):

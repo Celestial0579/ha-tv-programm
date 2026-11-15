@@ -19,7 +19,8 @@
       "ungueltige_adresse": "Die Adresse muss mit http:// oder https:// beginnen."
     },
     "abort": {
-      "already_configured": "Diese Quelle ist schon eingerichtet."
+      "already_configured": "Diese Quelle ist schon eingerichtet.",
+      "single_instance_allowed": "TV-Programm ist bereits eingerichtet."
     }
   },
   "options": {

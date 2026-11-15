@@ -20,6 +20,7 @@ import os
 from pathlib import Path
 import re
 from typing import Any
+from urllib.parse import urlsplit
 from xml.parsers import expat
 import zlib
 
@@ -67,6 +68,31 @@ def _zeit(wert: str | None) -> float | None:
             return None
 
 
+def ohne_zugang(url: str) -> str:
+    """Adresse zum Anzeigen: nur Schema, Rechner, Port und Pfad, ohne Zugangsdaten und Query.
+
+    Eigene Quellen (etwa Tvheadend) tragen oft „user:pass@“ oder ein Token im Query.
+    """
+    try:
+        teile = urlsplit(url)
+        rechner = teile.hostname or ""
+        if ":" in rechner:
+            rechner = f"[{rechner}]"
+        port = f":{teile.port}" if teile.port else ""
+    except ValueError:
+        return "(ungültige Adresse)"
+    return f"{teile.scheme}://{rechner}{port}{teile.path}"
+
+
+def _fehlertext(err: BaseException) -> str:
+    """Nur Art und Status, nie der Text der Ausnahme: aiohttp nennt darin die volle Adresse."""
+    if isinstance(err, aiohttp.ClientResponseError):
+        return f"{type(err).__name__} (HTTP {err.status})"
+    if isinstance(err, aiohttp.ClientError) or not isinstance(err, OSError) or not err.strerror:
+        return type(err).__name__
+    return f"{type(err).__name__}: {err.strerror}"  # Datenträger: errno-Text ohne Pfad
+
+
 async def herunterladen(sitzung: aiohttp.ClientSession, url: str, ziel: str, grenze: int = MAX_DOWNLOAD) -> int:
     """XMLTV-Datei herunterladen (folgt Weiterleitungen), Größe in Byte.
 
@@ -99,7 +125,7 @@ async def herunterladen(sitzung: aiohttp.ClientSession, url: str, ziel: str, gre
             datei = None
     except (aiohttp.ClientError, TimeoutError, OSError) as err:
         await schleife.run_in_executor(None, _weg, datei, teil)
-        raise EpgFehler(f"{type(err).__name__}: {str(err)[:100]}" if str(err) else type(err).__name__) from err
+        raise EpgFehler(_fehlertext(err)) from err
     except EpgFehler:
         await schleife.run_in_executor(None, _weg, datei, teil)
         raise

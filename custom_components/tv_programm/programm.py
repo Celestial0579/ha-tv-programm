@@ -184,7 +184,7 @@ class Programm:
     async def _quelle(self, url: str, datei: str, auswahl: list[str]) -> dict[str, Any]:
         groesse = await epg.herunterladen(async_get_clientsession(self.hass), url, datei)
         daten = await self.hass.async_add_executor_job(epg.auswerten, datei, auswahl)
-        _LOGGER.info("%s: %d MB, %d von %d gewünschten Sendern", url, groesse // 1_000_000, len(daten["programm"]), len(auswahl))
+        _LOGGER.info("%s: %d MB, %d von %d gewünschten Sendern", epg.ohne_zugang(url), groesse // 1_000_000, len(daten["programm"]), len(auswahl))
         return daten
 
     async def _laden(self) -> None:

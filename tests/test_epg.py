@@ -147,3 +147,28 @@ async def test_herunterladen(hass: HomeAssistant, quelle, tmp_path: Path, monkey
     with pytest.raises(epg.EpgFehler, match="größer"):
         await epg.herunterladen(sitzung, f"http://127.0.0.1:{quelle.port}/gross", ziel, grenze=100_000)
     assert not Path(ziel + ".teil").exists()
+
+
+def test_schreibweisen_teilen_ein_kontingent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(epg, "MAX_SENDUNGEN", 4)
+    namen = ["ZDF", "zdf", "Z-D-F", "z.d.f"]
+    inhalt = KOPF + "".join(_sender(f"k{n}", name) for n, name in enumerate(namen))
+    inhalt += "".join(_sendung(f"k{n}", f"2026111220{m:02d}00", "x") for n in range(4) for m in range(3)) + "</tv>"
+    daten = epg.auswerten(_datei(tmp_path / "a.xml", inhalt), ["ZDF"])
+    assert list(daten["programm"]) == ["ZDF"]
+    assert len(daten["programm"]["ZDF"]) == 4
+
+
+def test_zahl_der_sender_ist_begrenzt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(epg, "MAX_SENDER", 10)
+    inhalt = KOPF + "".join(_sender(f"k{n}", f"Sender {n}") for n in range(11)) + "</tv>"
+    with pytest.raises(epg.EpgFehler, match="mehr als 10 Sender"):
+        epg.auswerten(_datei(tmp_path / "a.xml", inhalt), None)
+
+
+def test_gesamtzahl_der_sendungen_ist_begrenzt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(epg, "MAX_GESAMT", 5)
+    inhalt = KOPF + _sender("a", "A") + _sender("b", "B")
+    inhalt += "".join(_sendung(k, f"2026111220{m:02d}00", "x") for k in "ab" for m in range(4)) + "</tv>"
+    daten = epg.auswerten(_datei(tmp_path / "a.xml", inhalt), None)
+    assert sum(len(e) for e in daten["programm"].values()) == 5

@@ -66,6 +66,9 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: TvProgrammConfigEntry) -> bool:
+    if entry.unique_id != DOMAIN:
+        # Bis 0.3.3 war die Quelladresse die unique_id, samt möglicher Zugangsdaten.
+        hass.config_entries.async_update_entry(entry, unique_id=DOMAIN)
     programm = Programm(hass, entry)
     entry.runtime_data = programm
     await programm.async_start()

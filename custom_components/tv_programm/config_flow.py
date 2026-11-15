@@ -42,7 +42,8 @@ class TvProgrammConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             fehler = _adressen_pruefen(user_input)
             if not fehler:
-                await self.async_set_unique_id(user_input[CONF_URL])
+                # Nicht die Adresse: Sie kann Zugangsdaten tragen (GHSA-3r2j-mp95-7p2c).
+                await self.async_set_unique_id(DOMAIN)
                 self._abort_if_unique_id_configured()
                 return self.async_create_entry(title="TV-Programm", data={**user_input, CONF_URL_ERSATZ: user_input.get(CONF_URL_ERSATZ) or ""})
         return self.async_show_form(

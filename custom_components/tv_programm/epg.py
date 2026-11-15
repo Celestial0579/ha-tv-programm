@@ -4,7 +4,8 @@ Schutzmodell: Die XMLTV-Datei kommt von einer fremden Adresse (Gemeinschaftsange
 unbekannten Betreibern, eigene Adressen auch über http://). Ihr Inhalt ist fremde Eingabe.
 Wer eine Quelle kontrolliert, soll Home Assistant weder den Datenträger füllen noch den
 Speicher sprengen können. Deshalb ist alles begrenzt: die heruntergeladene Menge, die
-entpackte Menge, die Länge jedes Texts, die Zahl der Sendungen je Sender. Gelesen wird ohne
+entpackte Menge, die Länge jedes Texts, die Zahl der Sender, die Sendungen je Sender (alle
+Schreibweisen zusammen) und die Sendungen insgesamt. Gelesen wird ohne
 Baum (expat direkt), Dokumente mit eigenen Entitäten werden abgelehnt.
 """
 
@@ -29,7 +30,9 @@ USER_AGENT = f"HomeAssistant-tv_programm/{FASSUNG} (+https://github.com/Celestia
 MAX_DOWNLOAD = 200_000_000  # Byte; die große Vorgabe-Quelle hat rund 45 MB
 MAX_ENTPACKT = 1_000_000_000  # Byte nach dem Entpacken
 MAX_TEXT = 1000  # Zeichen, die je Feld überhaupt gesammelt werden
-MAX_SENDUNGEN = 5000  # je Sender; fünf Tage haben selten mehr als 300
+MAX_SENDUNGEN = 5000  # je Sender (alle Schreibweisen zusammen); fünf Tage haben selten mehr als 300
+MAX_SENDER = 5000  # Sender in einer Datei; die großen Sammelquellen haben einige Hundert
+MAX_GESAMT = 50_000  # gespeicherte Sendungen insgesamt
 LAENGEN = {"title": 200, "sub-title": 200, "desc": 300, "category": 100, "display-name": 100}
 _STUECK = 1 << 16
 
@@ -118,6 +121,8 @@ class _Leser:
         self.gewuenscht = gewuenscht
         self.kanaele: dict[str, str] = {}
         self.programm: dict[str, list[list[Any]]] = {}
+        self._namen: dict[str, str] = {}  # norm(name) -> erste Schreibweise, unter der gespeichert wird
+        self._gesamt = 0
         self._art: str | None = None
         self._attr: dict[str, str] = {}
         self._felder: dict[str, str] = {}
@@ -145,7 +150,10 @@ class _Leser:
             self._felder[name] = text[: LAENGEN[name]]
             self._feld = None
         elif name == "channel" and self._art == "channel":
-            self.kanaele[self._attr.get("id", "")[:200]] = anzeigename(self._felder.get("display-name", ""))
+            kennung = self._attr.get("id", "")[:200]
+            if kennung not in self.kanaele and len(self.kanaele) >= MAX_SENDER:
+                raise EpgFehler(f"Datei enthält mehr als {MAX_SENDER} Sender")
+            self.kanaele[kennung] = anzeigename(self._felder.get("display-name", ""))
             self._art = None
         elif name == "programme" and self._art == "programme":
             self._sendung()
@@ -153,15 +161,22 @@ class _Leser:
 
     def _sendung(self) -> None:
         name = self.kanaele.get(self._attr.get("channel") or "")
-        if not name or (self.gewuenscht is not None and norm(name) not in self.gewuenscht):
+        if not name:
             return
-        eintraege = self.programm.setdefault(name, [])
+        schluessel = norm(name)
+        if self.gewuenscht is not None and schluessel not in self.gewuenscht:
+            return
+        if self._gesamt >= MAX_GESAMT:
+            return
+        # Alle Schreibweisen eines Senders teilen sich eine Liste und damit ein Kontingent.
+        eintraege = self.programm.setdefault(self._namen.setdefault(schluessel, name), [])
         if len(eintraege) >= MAX_SENDUNGEN:
             return
         start, ende = _zeit(self._attr.get("start")), _zeit(self._attr.get("stop"))
         if start is None:
             return
         f = self._felder
+        self._gesamt += 1
         eintraege.append([start, ende, f.get("title", ""), f.get("sub-title", ""), f.get("desc", ""), f.get("category", "")])
 
 

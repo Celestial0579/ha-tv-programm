@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 import gzip
 from pathlib import Path
 import threading
+import time
 import tracemalloc
 
 from aiohttp import web
@@ -106,6 +107,45 @@ def test_entpackte_menge_ist_begrenzt(tmp_path: Path) -> None:
     inhalt = KOPF + _sender("a", "A") + "<!--" + " " * 500_000 + "--></tv>"
     with pytest.raises(epg.EpgFehler, match="Entpackt größer"):
         epg.auswerten(_datei(tmp_path / "a.xml.gz", inhalt, gepackt=True), None, grenze=100_000)
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        '<programme channel="' + "x" * 20_000_000 + '">',  # Attributwert
+        "<" + "x" * 20_000_000 + ">",  # Elementname
+        '<channel id="a" ' + 'b="1" ' * 4_000_000 + ">",  # viele Attribute in einem Tag
+    ],
+    ids=["attribut", "name", "attribute"],
+)
+def test_ueberlanges_token_bricht_schnell_ab(tmp_path: Path, token: str) -> None:
+    """GHSA-3wcc-29h7-qrj8: expat puffert ein Token bis zum Ende; ohne Grenze Speicher und quadratische Zeit."""
+    pfad = _datei(tmp_path / "a.xml.gz", KOPF + _sender("a", "A") + token + "</tv>", gepackt=True)
+    assert Path(pfad).stat().st_size < 200_000  # gepackt winzig, MAX_DOWNLOAD greift nicht
+    tracemalloc.start()
+    beginn = time.process_time()
+    with pytest.raises(epg.EpgFehler, match="Token über"):
+        epg.auswerten(pfad, None)
+    dauer = time.process_time() - beginn
+    _jetzt, spitze = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    assert spitze < 5 * epg.MAX_TOKEN
+    assert dauer < 2  # früher Sekunden bis Stunden
+
+
+def test_langer_text_und_kommentar_unter_der_grenze(tmp_path: Path) -> None:
+    """Langer Text wird stückweise gemeldet und zählt nicht als ein Token."""
+    lang = "y" * (3 * epg.MAX_TOKEN)
+    inhalt = KOPF + "<!--" + "k" * (epg.MAX_TOKEN // 2) + "-->" + _sender("a", "A")
+    inhalt += _sendung("a", "20261112201500", "T", f"<desc>{lang}</desc>") + "</tv>"
+    daten = epg.auswerten(_datei(tmp_path / "a.xml", inhalt), ["A"])
+    assert len(daten["programm"]["A"][0][4]) == epg.LAENGEN["desc"]
+
+
+def test_langer_kommentar_ist_ein_token(tmp_path: Path) -> None:
+    inhalt = KOPF + _sender("a", "A") + "<!--" + "k" * (2 * epg.MAX_TOKEN) + "--></tv>"
+    with pytest.raises(epg.EpgFehler, match="Token über"):
+        epg.auswerten(_datei(tmp_path / "a.xml", inhalt), None)
 
 
 @pytest.fixture

@@ -4,7 +4,7 @@ Schutzmodell: Die XMLTV-Datei kommt von einer fremden Adresse (Gemeinschaftsange
 unbekannten Betreibern, eigene Adressen auch über http://). Ihr Inhalt ist fremde Eingabe.
 Wer eine Quelle kontrolliert, soll Home Assistant weder den Datenträger füllen noch den
 Speicher sprengen können. Deshalb ist alles begrenzt: die heruntergeladene Menge, die
-entpackte Menge, die Länge jedes Texts, die Zahl der Sender, die Sendungen je Sender (alle
+entpackte Menge, die Länge jedes Texts und jedes einzelnen Tokens der Auszeichnung, die Zahl der Sender, die Sendungen je Sender (alle
 Schreibweisen zusammen) und die Sendungen insgesamt. Gelesen wird ohne
 Baum (expat direkt), Dokumente mit eigenen Entitäten werden abgelehnt.
 """
@@ -33,6 +33,7 @@ MAX_TEXT = 1000  # Zeichen, die je Feld überhaupt gesammelt werden
 MAX_SENDUNGEN = 5000  # je Sender (alle Schreibweisen zusammen); fünf Tage haben selten mehr als 300
 MAX_SENDER = 5000  # Sender in einer Datei; die großen Sammelquellen haben einige Hundert
 MAX_GESAMT = 50_000  # gespeicherte Sendungen insgesamt
+MAX_TOKEN = 1_000_000  # Byte, die expat ohne Ereignis puffern darf (ein Tag, ein Attributwert, ein Name)
 LAENGEN = {"title": 200, "sub-title": 200, "desc": 300, "category": 100, "display-name": 100}
 _STUECK = 1 << 16
 
@@ -193,13 +194,29 @@ def auswerten(pfad: str, auswahl: Iterable[str] | None, grenze: int = MAX_ENTPAC
     leser = _Leser({norm(s) for s in auswahl} if auswahl is not None else None)
     parser = expat.ParserCreate()
     parser.SetParamEntityParsing(expat.XML_PARAM_ENTITY_PARSING_NEVER)
-    # Ohne Aufschub meldet expat langen Text stückweise, statt ihn ganz zu puffern.
+    # Ohne Aufschub meldet expat langen Text stückweise, statt ihn ganz zu puffern. Dafür setzt
+    # expat bei jedem Stück am Anfang eines unvollständigen Tokens neu an; MAX_TOKEN hält diesen
+    # Aufwand (und den Puffer) klein: höchstens MAX_TOKEN / _STUECK Durchläufe über MAX_TOKEN Byte.
     if hasattr(parser, "SetReparseDeferralEnabled"):
         parser.SetReparseDeferralEnabled(False)
+    letztes = [0]  # Byteposition des letzten Ereignisses
+
+    def gemerkt(handler):
+        def aufruf(*args: Any) -> None:
+            letztes[0] = parser.CurrentByteIndex
+            handler(*args)
+        return aufruf
+
+    def nur_merken(*_args: Any) -> None:
+        letztes[0] = parser.CurrentByteIndex
+
     parser.EntityDeclHandler = _keine_entitaeten
-    parser.StartElementHandler = leser.start
-    parser.EndElementHandler = leser.ende
-    parser.CharacterDataHandler = leser.text
+    parser.StartElementHandler = gemerkt(leser.start)
+    parser.EndElementHandler = gemerkt(leser.ende)
+    parser.CharacterDataHandler = gemerkt(leser.text)
+    parser.CommentHandler = nur_merken
+    parser.ProcessingInstructionHandler = nur_merken
+    parser.StartDoctypeDeclHandler = nur_merken
     gelesen = 0
     try:
         with open(pfad, "rb") as probe:
@@ -210,6 +227,8 @@ def auswerten(pfad: str, auswahl: Iterable[str] | None, grenze: int = MAX_ENTPAC
                 if gelesen > grenze:
                     raise EpgFehler(f"Entpackt größer als {grenze // 1_000_000} MB")
                 parser.Parse(stueck, False)
+                if gelesen - letztes[0] > MAX_TOKEN:
+                    raise EpgFehler(f"Datei enthält ein Token über {MAX_TOKEN // 1_000_000} MB")
             parser.Parse(b"", True)
     except (expat.ExpatError, OSError, EOFError) as err:
         raise EpgFehler(f"Datei ist kein gültiges XMLTV: {str(err)[:100]}") from err

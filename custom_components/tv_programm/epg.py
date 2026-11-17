@@ -7,6 +7,12 @@ Speicher sprengen können. Deshalb ist alles begrenzt: die heruntergeladene Meng
 entpackte Menge, die Länge jedes Texts und jedes einzelnen Tokens der Auszeichnung, die Tiefe der Verschachtelung, die Zahl der Sender, die Sendungen je Sender (alle
 Schreibweisen zusammen) und die Sendungen insgesamt. Gelesen wird ohne
 Baum (expat direkt), Dokumente mit eigenen Entitäten werden abgelehnt.
+
+Auch die Weiterleitungen einer Quelle sind fremde Eingabe (GHSA-m7cx-3q6v-c42v): Sie werden
+selbst verfolgt, höchstens MAX_WEITERLEITUNGEN, nie von https auf http und von einer
+öffentlichen Quelle nie ins lokale Netz (Loopback, privat, Link-Local, ULA, Multicast,
+reserviert). Eine eigene Quelle im Heimnetz (Tvheadend) darf innerhalb des Heimnetzes
+weiterleiten.
 """
 
 from __future__ import annotations
@@ -15,16 +21,19 @@ import asyncio
 from collections.abc import Iterable
 from datetime import UTC, datetime
 import gzip
+import ipaddress
 import json
 import os
 from pathlib import Path
 import re
+import socket
 from typing import Any
 from urllib.parse import urlsplit
 from xml.parsers import expat
 import zlib
 
 import aiohttp
+from yarl import URL
 
 FASSUNG = json.loads(Path(__file__).with_name("manifest.json").read_text(encoding="utf-8"))["version"]
 USER_AGENT = f"HomeAssistant-tv_programm/{FASSUNG} (+https://github.com/Celestial0579/ha-tv-programm)"
@@ -37,6 +46,9 @@ MAX_SENDER = 5000  # Sender in einer Datei; die großen Sammelquellen haben eini
 MAX_GESAMT = 50_000  # gespeicherte Sendungen insgesamt
 MAX_TOKEN = 1_000_000  # Byte, die expat ohne Ereignis puffern darf (ein Tag, ein Attributwert, ein Name)
 MAX_TIEFE = 8  # Verschachtelung; XMLTV kommt mit 3 Ebenen aus (tv > programme > title)
+MAX_WEITERLEITUNGEN = 5
+WEITERLEITUNG = (301, 302, 303, 307, 308)
+ZEIT_GESAMT = 600  # Sekunden für Weiterleitungen und Herunterladen zusammen
 LAENGEN = {"title": 200, "sub-title": 200, "desc": 300, "category": 100, "display-name": 100}
 _STUECK = 1 << 16
 
@@ -93,19 +105,103 @@ def _fehlertext(err: BaseException) -> str:
     return f"{type(err).__name__}: {err.strerror}"  # Datenträger: errno-Text ohne Pfad
 
 
-async def herunterladen(sitzung: aiohttp.ClientSession, url: str, ziel: str, grenze: int = MAX_DOWNLOAD) -> int:
-    """XMLTV-Datei herunterladen (folgt Weiterleitungen), Größe in Byte.
+def _nicht_oeffentlich(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Loopback, privat, Link-Local, ULA, Multicast, reserviert oder unbestimmt (auch als ::ffff:a.b.c.d)."""
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return not ip.is_global or ip.is_multicast or ip.is_reserved or ip.is_unspecified
 
+
+async def _adressen(rechner: str, port: int) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    """IP-Adressen eines Rechners; eine IP-Adresse steht für sich selbst."""
+    try:
+        return [ipaddress.ip_address(rechner)]
+    except ValueError:
+        pass
+    infos = await asyncio.get_running_loop().getaddrinfo(rechner, port, type=socket.SOCK_STREAM)
+    return [ipaddress.ip_address(str(info[4][0]).split("%", 1)[0]) for info in infos]
+
+
+def _localhost(rechner: str) -> bool:
+    name = rechner.lower().rstrip(".")
+    return name == "localhost" or name.endswith(".localhost")
+
+
+async def _lokal(rechner: str, port: int) -> bool:
+    """Ziel einer Weiterleitung: lokal, sobald eine Adresse nicht öffentlich ist. Nicht auflösbar gilt als lokal."""
+    if _localhost(rechner):
+        return True
+    try:
+        adressen = await _adressen(rechner, port)
+    except (OSError, ValueError):
+        return True
+    return not adressen or any(_nicht_oeffentlich(a) for a in adressen)
+
+
+async def _nur_lokal(rechner: str, port: int) -> bool:
+    """Eingestellte Adresse: eine Quelle im Heimnetz, wenn alle Adressen nicht öffentlich sind."""
+    if _localhost(rechner):
+        return True
+    try:
+        adressen = await _adressen(rechner, port)
+    except (OSError, ValueError):
+        return False
+    return bool(adressen) and all(_nicht_oeffentlich(a) for a in adressen)
+
+
+async def _weiterleitung_abgelehnt(alt: URL, neu: URL, start_lokal: bool) -> str | None:
+    """Grund, aus dem eine Weiterleitung nicht verfolgt wird, sonst None. Nie mit der Adresse im Text."""
+    if neu.scheme not in ("http", "https") or not neu.host:
+        return "kein http(s)"
+    if alt.scheme == "https" and neu.scheme == "http":
+        return "von https auf http"
+    if not start_lokal and await _lokal(neu.host, neu.port or 80):
+        return "Ziel im lokalen Netz"
+    return None
+
+
+async def _oeffnen(sitzung: aiohttp.ClientSession, url: str) -> aiohttp.ClientResponse:
+    """GET mit selbst verfolgten Weiterleitungen (GHSA-m7cx-3q6v-c42v). Der Aufrufer gibt die Antwort frei."""
+    try:
+        aktuell = URL(url)
+    except (ValueError, TypeError) as err:
+        raise EpgFehler("Adresse ungültig") from err
+    if aktuell.scheme not in ("http", "https") or not aktuell.host:
+        raise EpgFehler("Adresse ist kein http(s)")
+    start_lokal = await _nur_lokal(aktuell.host, aktuell.port or 80)
+    for _ in range(MAX_WEITERLEITUNGEN + 1):
+        antwort = await sitzung.get(
+            aktuell, headers={"User-Agent": USER_AGENT}, allow_redirects=False,
+            timeout=aiohttp.ClientTimeout(total=ZEIT_GESAMT),
+        )
+        if antwort.status not in WEITERLEITUNG:
+            return antwort
+        ort = antwort.headers.get("Location", "")
+        antwort.release()
+        try:
+            neu = aktuell.join(URL(ort))
+        except (ValueError, TypeError) as err:
+            raise EpgFehler("Weiterleitung abgelehnt: ungültiges Ziel") from err
+        if not ort or (grund := await _weiterleitung_abgelehnt(aktuell, neu, start_lokal)):
+            raise EpgFehler(f"Weiterleitung abgelehnt: {grund if ort else 'ohne Ziel'}")
+        aktuell = neu
+    raise EpgFehler(f"Mehr als {MAX_WEITERLEITUNGEN} Weiterleitungen")
+
+
+async def herunterladen(sitzung: aiohttp.ClientSession, url: str, ziel: str, grenze: int = MAX_DOWNLOAD) -> int:
+    """XMLTV-Datei herunterladen, Größe in Byte.
+
+    Weiterleitungen verfolgt _oeffnen, mit den Grenzen aus dem Schutzmodell oben.
     Dateizugriffe laufen im Executor, nicht in der Ereignisschleife.
     """
     schleife = asyncio.get_running_loop()
     teil = ziel + ".teil"
     datei = None
     groesse = 0
+    antwort: aiohttp.ClientResponse | None = None
     try:
-        async with sitzung.get(
-            url, headers={"User-Agent": USER_AGENT}, timeout=aiohttp.ClientTimeout(total=600)
-        ) as antwort:
+        async with asyncio.timeout(ZEIT_GESAMT):
+            antwort = await _oeffnen(sitzung, url)
             if antwort.status != 200:
                 raise EpgFehler(f"HTTP {antwort.status}")
             if (antwort.content_length or 0) > grenze:
@@ -129,6 +225,9 @@ async def herunterladen(sitzung: aiohttp.ClientSession, url: str, ziel: str, gre
     except EpgFehler:
         await schleife.run_in_executor(None, _weg, datei, teil)
         raise
+    finally:
+        if antwort is not None:
+            antwort.release()
     await schleife.run_in_executor(None, os.replace, teil, ziel)
     return groesse
 

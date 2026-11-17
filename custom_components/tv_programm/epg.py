@@ -55,17 +55,26 @@ def anzeigename(roh: str) -> str:
     return re.sub(r"^[A-Z]{2,3}\s*[-|:]\s*", "", (roh or "").strip())
 
 
+ZEIT_BIS = 4_102_444_800  # 2100-01-01 UTC: spätere und frühere Zeiten (vor 1970) sind unplausibel (#13)
+
+
+def plausibel(zeit: Any) -> bool:
+    """Zeitstempel zwischen 1970 und 2099: Den rechnet Home Assistant sicher in Ortszeit um (#13)."""
+    return isinstance(zeit, (int, float)) and 0 <= zeit < ZEIT_BIS
+
+
 def _zeit(wert: str | None) -> float | None:
-    """XMLTV-Zeit; ohne Angabe der Zeitzone gilt laut XMLTV UTC."""
+    """XMLTV-Zeit; ohne Angabe der Zeitzone gilt laut XMLTV UTC. Unplausible Zeiten ergeben None."""
     if not wert:
         return None
     try:
-        return datetime.strptime(wert.strip()[:20], "%Y%m%d%H%M%S %z").timestamp()
-    except ValueError:
+        zeit = datetime.strptime(wert.strip()[:20], "%Y%m%d%H%M%S %z").timestamp()
+    except (ValueError, OverflowError):
         try:
-            return datetime.strptime(wert.strip()[:14], "%Y%m%d%H%M%S").replace(tzinfo=UTC).timestamp()
-        except ValueError:
+            zeit = datetime.strptime(wert.strip()[:14], "%Y%m%d%H%M%S").replace(tzinfo=UTC).timestamp()
+        except (ValueError, OverflowError):
             return None
+    return zeit if plausibel(zeit) else None
 
 
 def ohne_zugang(url: str) -> str:
@@ -211,6 +220,8 @@ class _Leser:
         start, ende = _zeit(self._attr.get("start")), _zeit(self._attr.get("stop"))
         if start is None:
             return
+        if ende is not None and ende <= start:
+            ende = None  # Ende vor dem Beginn: wie ohne Ende behandeln
         f = self._felder
         self._gesamt += 1
         eintraege.append([start, ende, f.get("title", ""), f.get("sub-title", ""), f.get("desc", ""), f.get("category", "")])

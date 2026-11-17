@@ -139,7 +139,11 @@ class Programm:
         self.alle_sender = daten.get("alle_sender", [])
         self.alle_ersatz = daten.get("alle_ersatz", [])
         self.aus_ersatz = daten.get("aus_ersatz", [])
-        self.programm = daten.get("programm", {})
+        # Gespeicherte Sendungen mit unplausiblen Zeiten (vor #13 geladen) nicht übernehmen.
+        self.programm = {
+            name: [e for e in eintraege if epg.plausibel(e[0]) and (not e[1] or epg.plausibel(e[1]))]
+            for name, eintraege in (daten.get("programm") or {}).items()
+        }
         if daten.get("stand"):
             self.stand = dt_util.parse_datetime(daten["stand"])
         stunde, minute, *_ = (int(x) for x in str(self.entry.data.get(CONF_UHRZEIT, DEFAULT_UHRZEIT)).split(":"))

@@ -12,7 +12,11 @@ Auch die Weiterleitungen einer Quelle sind fremde Eingabe (GHSA-m7cx-3q6v-c42v):
 selbst verfolgt, höchstens MAX_WEITERLEITUNGEN, nie von https auf http und von einer
 öffentlichen Quelle nie ins lokale Netz (Loopback, privat, Link-Local, ULA, Multicast,
 reserviert). Eine eigene Quelle im Heimnetz (Tvheadend) darf innerhalb des Heimnetzes
-weiterleiten.
+weiterleiten. Ob eine Quelle im Heimnetz liegt, steht allein in der eingetragenen Adresse
+(IP-Adresse, localhost, .local, .lan, .home.arpa), nie im DNS: Wer das DNS einer Quelle
+beherrscht, könnte sonst bei der Prüfung „privat“ antworten und so jede Prüfung abschalten.
+Die Vorgabe-Quellen gelten immer als öffentlich. Beim Verbinden prüft der Resolver der
+eigenen Sitzung jede Adresse noch einmal (DNS-Rebinding zwischen Prüfung und Verbindung).
 """
 
 from __future__ import annotations
@@ -33,7 +37,12 @@ from xml.parsers import expat
 import zlib
 
 import aiohttp
+from aiohttp.abc import AbstractResolver, ResolveResult
 from yarl import URL
+
+from homeassistant.util.ssl import client_context
+
+from .const import DEFAULT_URL, DEFAULT_URL_ERSATZ
 
 FASSUNG = json.loads(Path(__file__).with_name("manifest.json").read_text(encoding="utf-8"))["version"]
 USER_AGENT = f"HomeAssistant-tv_programm/{FASSUNG} (+https://github.com/Celestial0579/ha-tv-programm)"
@@ -122,9 +131,83 @@ async def _adressen(rechner: str, port: int) -> list[ipaddress.IPv4Address | ipa
     return [ipaddress.ip_address(str(info[4][0]).split("%", 1)[0]) for info in infos]
 
 
+def _name(rechner: str) -> str:
+    return rechner.lower().rstrip(".")
+
+
 def _localhost(rechner: str) -> bool:
-    name = rechner.lower().rstrip(".")
+    name = _name(rechner)
     return name == "localhost" or name.endswith(".localhost")
+
+
+HEIMNETZ_ENDUNGEN = (".local", ".lan", ".home.arpa")
+_VORGABE_RECHNER = frozenset(_name(URL(u).host or "") for u in (DEFAULT_URL, DEFAULT_URL_ERSATZ))
+
+
+def quelle_lokal(url: URL) -> bool:
+    """Eingestellte Quelle im Heimnetz? Nur nach der Adresse selbst, ohne DNS (GHSA-m7cx-3q6v-c42v).
+
+    Lokal ist eine private IP-Adresse, localhost oder ein Name auf .local, .lan oder .home.arpa.
+    Die Vorgabe-Quellen sind es nie. Ein anderer Name gilt als öffentlich, auch wenn ihn das
+    DNS im Heimnetz auflöst: Seine Weiterleitungen dürfen dann nicht ins Heimnetz.
+    """
+    rechner = _name(url.host or "")
+    if not rechner or rechner in _VORGABE_RECHNER:
+        return False
+    if _localhost(rechner) or rechner.endswith(HEIMNETZ_ENDUNGEN):
+        return True
+    try:
+        return _nicht_oeffentlich(ipaddress.ip_address(rechner.split("%", 1)[0]))
+    except ValueError:
+        return False
+
+
+def _innerer_aufloeser() -> AbstractResolver:
+    return aiohttp.DefaultResolver()
+
+
+class _Aufloeser(AbstractResolver):
+    """Resolver der eigenen Sitzung: prüft jede Adresse beim Verbinden (gegen DNS-Rebinding).
+
+    Ist die Quelle nicht lokal, darf keine aufgelöste Adresse nicht öffentlich sein. Einzige
+    Ausnahme ist die erste Auflösung des eingetragenen Rechners selbst: Ein Name, den das DNS
+    im Heimnetz privat auflöst, bleibt als Quelle nutzbar. Jede weitere Auflösung prüft auch
+    ihn; bis dahin verbindet aiohttp aus dem DNS-Zwischenspeicher zur selben Adresse.
+    """
+
+    def __init__(self, lokal_erlaubt: bool, start: str | None) -> None:
+        self._innen = _innerer_aufloeser()
+        self._lokal_erlaubt = lokal_erlaubt
+        self._start = _name(start) if start else None
+
+    async def resolve(
+        self, host: str, port: int = 0, family: socket.AddressFamily = socket.AF_INET
+    ) -> list[ResolveResult]:
+        eintraege = await self._innen.resolve(host, port, family)
+        if self._lokal_erlaubt:
+            return eintraege
+        if self._start is not None and _name(host) == self._start:
+            self._start = None
+            return eintraege
+        if _localhost(host) or not eintraege or any(
+            _nicht_oeffentlich(ipaddress.ip_address(str(e["host"]).split("%", 1)[0])) for e in eintraege
+        ):
+            raise OSError("Ziel im lokalen Netz")  # nie die Adresse im Text
+        return eintraege
+
+    async def close(self) -> None:
+        await self._innen.close()
+
+
+def eigene_sitzung(url: str) -> aiohttp.ClientSession:
+    """Sitzung nur für einen Abruf, mit dem prüfenden Resolver. Der Aufrufer schließt sie."""
+    try:
+        start = URL(url)
+        lokal = quelle_lokal(start)
+    except (ValueError, TypeError):
+        start, lokal = None, False
+    aufloeser = _Aufloeser(lokal, start.host if start is not None else None)
+    return aiohttp.ClientSession(connector=aiohttp.TCPConnector(resolver=aufloeser, ssl=client_context()))
 
 
 async def _lokal(rechner: str, port: int) -> bool:
@@ -136,17 +219,6 @@ async def _lokal(rechner: str, port: int) -> bool:
     except (OSError, ValueError):
         return True
     return not adressen or any(_nicht_oeffentlich(a) for a in adressen)
-
-
-async def _nur_lokal(rechner: str, port: int) -> bool:
-    """Eingestellte Adresse: eine Quelle im Heimnetz, wenn alle Adressen nicht öffentlich sind."""
-    if _localhost(rechner):
-        return True
-    try:
-        adressen = await _adressen(rechner, port)
-    except (OSError, ValueError):
-        return False
-    return bool(adressen) and all(_nicht_oeffentlich(a) for a in adressen)
 
 
 async def _weiterleitung_abgelehnt(alt: URL, neu: URL, start_lokal: bool) -> str | None:
@@ -168,7 +240,7 @@ async def _oeffnen(sitzung: aiohttp.ClientSession, url: str) -> aiohttp.ClientRe
         raise EpgFehler("Adresse ungültig") from err
     if aktuell.scheme not in ("http", "https") or not aktuell.host:
         raise EpgFehler("Adresse ist kein http(s)")
-    start_lokal = await _nur_lokal(aktuell.host, aktuell.port or 80)
+    start_lokal = quelle_lokal(aktuell)
     for _ in range(MAX_WEITERLEITUNGEN + 1):
         antwort = await sitzung.get(
             aktuell, headers={"User-Agent": USER_AGENT}, allow_redirects=False,

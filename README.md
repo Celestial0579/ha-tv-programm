@@ -41,6 +41,11 @@ Datei täglich mitgeladen. Beides sind Gemeinschaftsangebote ohne erkennbare Nut
 lädt höchstens einmal täglich mit eigenem User-Agent. Jede andere XMLTV-Adresse funktioniert ebenso – etwa die eines
 eigenen Tvheadend-Servers. Bestehende Einrichtungen mit der alten Vorgabe stellen sich beim Update selbst um.
 
+Weiterleitungen einer Quelle führen nie ins Heimnetz, außer die Quelle liegt selbst dort. Das erkennt die Integration
+nur an der eingetragenen Adresse: eine private IP-Adresse, `localhost` oder ein Name auf `.local`, `.lan` oder
+`.home.arpa`. Ein anderer Name gilt als öffentlich, auch wenn das eigene DNS ihn im Heimnetz auflöst. Laden lässt er
+sich trotzdem, nur seine Weiterleitungen ins Heimnetz werden abgelehnt.
+
 ---
 
 ## English summary

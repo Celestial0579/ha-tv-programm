@@ -12,7 +12,6 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_time_change
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
@@ -186,7 +185,8 @@ class Programm:
             self._melden()
 
     async def _quelle(self, url: str, datei: str, auswahl: list[str]) -> dict[str, Any]:
-        groesse = await epg.herunterladen(async_get_clientsession(self.hass), url, datei)
+        async with epg.eigene_sitzung(url) as sitzung:  # Resolver prüft beim Verbinden (GHSA-m7cx-3q6v-c42v)
+            groesse = await epg.herunterladen(sitzung, url, datei)
         daten = await self.hass.async_add_executor_job(epg.auswerten, datei, auswahl)
         _LOGGER.info("%s: %d MB, %d von %d gewünschten Sendern", epg.ohne_zugang(url), groesse // 1_000_000, len(daten["programm"]), len(auswahl))
         return daten

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime, timedelta
+import glob
 import logging
 import os
+import secrets
 import time
 from typing import Any
 
@@ -74,8 +76,10 @@ class Programm:
         self.stand: datetime | None = None
         self.fehler: str | None = None
         self._store: Store[dict[str, Any]] = Store(hass, 1, f"{DOMAIN}.{entry.entry_id}")
-        self._datei = hass.config.path(".storage", f"{DOMAIN}.{entry.entry_id}.xml")
-        self._datei_ersatz = hass.config.path(".storage", f"{DOMAIN}.{entry.entry_id}.ersatz.xml")
+        # Je Ladelauf eigene Dateien (#18): Eine alte Instanz, die beim Neuladen noch
+        # aufräumt, trifft so nie die Dateien der neuen.
+        self._datei = self._pfad("start", "")
+        self._datei_ersatz = self._pfad("start", ".ersatz")
         self._zuhoerer: list[Callable[[], None]] = []
         self._abmelden: list[CALLBACK_TYPE] = []
         self._laeuft = False
@@ -132,7 +136,18 @@ class Programm:
             rueckruf()
 
     # ------------------------------------------------------------ Lebenszyklus
+    def _pfad(self, lauf: str, art: str) -> str:
+        return self.hass.config.path(".storage", f"{DOMAIN}.{self.entry.entry_id}.{lauf}{art}.xml")
+
+    def starten(self, name: str) -> None:
+        """Laden als Hintergrundaufgabe des Eintrags.
+
+        Home Assistant bricht sie beim Entladen ab und wartet bis zu 10 s darauf (#18).
+        """
+        self.entry.async_create_background_task(self.hass, self.async_aktualisieren(), f"{DOMAIN}_{name}")
+
     async def async_start(self) -> None:
+        await self.hass.async_add_executor_job(self._reste_weg)
         daten = await self._store.async_load() or {}
         self._gespeichert = daten
         self.alle_sender = daten.get("alle_sender", [])
@@ -150,7 +165,7 @@ class Programm:
             async_track_time_change(self.hass, self._taeglich, hour=stunde, minute=minute, second=0)
         )
         if self.beim_start_laden(daten):
-            self.hass.async_create_background_task(self.async_aktualisieren(), f"{DOMAIN}_start")
+            self.starten("start")
 
     def beim_start_laden(self, daten: dict[str, Any]) -> bool:
         """Nur laden, wenn es nötig ist: alt, andere Quelle oder neu gewünschte Sender.
@@ -170,18 +185,22 @@ class Programm:
             abmelden()
         self._abmelden.clear()
 
-    async def _taeglich(self, _jetzt: datetime) -> None:
-        await self.async_aktualisieren()
+    @callback
+    def _taeglich(self, _jetzt: datetime) -> None:
+        self.starten("taeglich")
 
     async def async_aktualisieren(self) -> None:
         if self._laeuft:
             return
         self._laeuft = True
+        lauf = secrets.token_hex(4)
+        self._datei, self._datei_ersatz = self._pfad(lauf, ""), self._pfad(lauf, ".ersatz")
+        dateien = (self._datei, self._datei_ersatz)
         try:
             await self._laden()
         finally:
             self._laeuft = False
-            await self.hass.async_add_executor_job(self._datei_weg)
+            await self.hass.async_add_executor_job(_datei_weg, dateien)
             self._melden()
 
     async def _quelle(self, url: str, datei: str, auswahl: list[str]) -> dict[str, Any]:
@@ -236,10 +255,18 @@ class Programm:
         }
         await self._store.async_save(self._gespeichert)
 
-    def _datei_weg(self) -> None:
-        for pfad in (self._datei, self._datei + ".teil", self._datei_ersatz, self._datei_ersatz + ".teil"):
-            if os.path.exists(pfad):
-                os.remove(pfad)
+    def _reste_weg(self) -> None:
+        """Dateien abgebrochener Läufe: frühere feste Namen und Laufdateien älter als eine Stunde."""
+        jetzt = time.time()
+        basis = self.hass.config.path(".storage", f"{DOMAIN}.{self.entry.entry_id}")
+        for pfad in glob.glob(glob.escape(basis) + ".*"):
+            if not pfad.endswith((".xml", ".xml.teil")):
+                continue  # z. B. der Store selbst
+            try:
+                if jetzt - os.path.getmtime(pfad) > 3600:
+                    os.remove(pfad)
+            except OSError:
+                pass
 
     # ------------------------------------------------------------ Abfragen
     def _sender_waehlen(self, wunsch: list[str] | None) -> list[str]:
@@ -310,3 +337,11 @@ class Programm:
                 liste.append({"sender": name, "laeuft": laufend, "danach": folgend})
         lokal = dt_util.as_local(dt_util.utc_from_timestamp(zeit))
         return {"zeitpunkt": f"{WOCHENTAGE[lokal.weekday()]}, {lokal.strftime('%d.%m. %H:%M')}", "sender": liste}
+
+
+def _datei_weg(dateien: tuple[str, ...]) -> None:
+    """Nur die Dateien des eigenen Laufs löschen."""
+    for datei in dateien:
+        for pfad in (datei, datei + ".teil"):
+            if os.path.exists(pfad):
+                os.remove(pfad)

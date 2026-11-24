@@ -300,16 +300,20 @@ async def herunterladen(sitzung: aiohttp.ClientSession, url: str, ziel: str, gre
             await schleife.run_in_executor(None, datei.write, bytes(puffer))
             await schleife.run_in_executor(None, datei.close)
             datei = None
+        await schleife.run_in_executor(None, os.replace, teil, ziel)
     except (aiohttp.ClientError, TimeoutError, OSError) as err:
         await schleife.run_in_executor(None, _weg, datei, teil)
         raise EpgFehler(_fehlertext(err)) from err
     except EpgFehler:
         await schleife.run_in_executor(None, _weg, datei, teil)
         raise
+    except asyncio.CancelledError:
+        # Abbruch beim Entladen (#18): kein await mehr möglich, also direkt aufräumen.
+        _weg(datei, teil)
+        raise
     finally:
         if antwort is not None:
             antwort.release()
-    await schleife.run_in_executor(None, os.replace, teil, ziel)
     return groesse
 
 

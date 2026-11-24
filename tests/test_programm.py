@@ -70,11 +70,11 @@ async def test_beide_quellen_fallen_aus(hass: HomeAssistant) -> None:
 async def test_ladeentscheidung_beim_start(hass: HomeAssistant) -> None:
     programm = Programm(hass, _eintrag(hass, ["ZDF", "ARD alpha"]))
     programm.stand = dt_util.utcnow()
-    frisch = {"quellen": [HAUPT, ERSATZ], "wunsch": ["ZDF", "ARD alpha"], "versuch": time.time()}
+    frisch = {"quellen_fp": programm._quellen_fp, "wunsch": ["ZDF", "ARD alpha"], "versuch": time.time()}
     # „ARD alpha“ hat kein Programm: das allein ist kein Grund zu laden.
     assert programm.beim_start_laden(frisch) is False
     assert programm.beim_start_laden({**frisch, "wunsch": ["ZDF"]}) is True  # neu gewünscht
-    assert programm.beim_start_laden({**frisch, "quellen": ["alt", ""]}) is True
+    assert programm.beim_start_laden({**frisch, "quellen_fp": "alt"}) is True
     programm.stand = dt_util.utcnow() - timedelta(hours=21)
     assert programm.beim_start_laden({**frisch, "versuch": time.time() - 7200}) is True
 
@@ -94,13 +94,14 @@ async def test_abfragen_mit_suche_und_spitznamen(hass: HomeAssistant) -> None:
         programm.abfragen(None, ["Gibtsnicht"], None)
 
 
-async def test_optionen_speichern_waehrend_des_ladens(hass: HomeAssistant) -> None:
+async def test_optionen_speichern_waehrend_des_ladens(hass: HomeAssistant, tmp_path: Any) -> None:
     """#18: Beim Neuladen bricht der alte Ladelauf ab; nie zwei Downloads zugleich, die neue Instanz hat Programm."""
     import asyncio
     import contextlib
     import glob
     import os
 
+    hass.config.config_dir = str(tmp_path)  # nicht ins testing_config des Pakets schreiben
     os.makedirs(hass.config.path(".storage"), exist_ok=True)
     eintrag = _eintrag(hass, ["ZDF"])
     laufend = 0

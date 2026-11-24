@@ -9,11 +9,12 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.util import dt as dt_util
 
 from .const import ALTE_URL, CONF_URL, CONF_URL_ERSATZ, DEFAULT_URL, DIENST_ABFRAGEN, DOMAIN
-from .programm import Programm
+from .programm import Programm, dateien_weg
 
 PLATFORMS = [Platform.BUTTON, Platform.SENSOR]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -85,3 +86,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: TvProgrammConfigEntry) 
 
 async def _optionen_geaendert(hass: HomeAssistant, entry: TvProgrammConfigEntry) -> None:
     await hass.config_entries.async_reload(entry.entry_id)
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: TvProgrammConfigEntry) -> None:
+    """Speicher und heruntergeladene Dateien des Eintrags löschen (GHSA-ppx8-wvfc-f452)."""
+    await Store(hass, 1, f"{DOMAIN}.{entry.entry_id}").async_remove()
+    await hass.async_add_executor_job(dateien_weg, hass, entry.entry_id)

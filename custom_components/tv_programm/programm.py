@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime, timedelta
 import glob
+import hashlib
+import json
 import logging
 import os
 import secrets
@@ -149,6 +151,12 @@ class Programm:
     async def async_start(self) -> None:
         await self.hass.async_add_executor_job(self._reste_weg)
         daten = await self._store.async_load() or {}
+        if "quellen" in daten:
+            # Bis 0.3.x standen hier die vollen Adressen, samt möglicher Zugangsdaten (GHSA-ppx8-wvfc-f452).
+            # Nur noch den Fingerabdruck behalten und sofort überschreiben.
+            alt = daten.pop("quellen")
+            daten["quellen_fp"] = _fingerabdruck(*(list(alt) + ["", ""])[:2]) if isinstance(alt, list) else None
+            await self._store.async_save(daten)
         self._gespeichert = daten
         self.alle_sender = daten.get("alle_sender", [])
         self.alle_ersatz = daten.get("alle_ersatz", [])
@@ -167,6 +175,10 @@ class Programm:
         if self.beim_start_laden(daten):
             self.starten("start")
 
+    @property
+    def _quellen_fp(self) -> str:
+        return _fingerabdruck(self.haupt_url, self.ersatz_url)
+
     def beim_start_laden(self, daten: dict[str, Any]) -> bool:
         """Nur laden, wenn es nötig ist: alt, andere Quelle oder neu gewünschte Sender.
 
@@ -174,7 +186,7 @@ class Programm:
         beim nächsten Laden keins. Nach einem Fehlschlag frühestens nach einer Stunde.
         """
         veraltet = self.stand is None or dt_util.utcnow() - self.stand > timedelta(hours=20)
-        quelle_neu = daten.get("quellen") != [self.haupt_url, self.ersatz_url]
+        quelle_neu = daten.get("quellen_fp") != self._quellen_fp
         vorher = {_norm(w) for w in daten.get("wunsch", self.wunsch)}
         neu_gewuenscht = bool({_norm(w) for w in self.wunsch} - vorher)
         zu_frueh = time.time() - float(daten.get("versuch") or 0) < 3600
@@ -236,7 +248,7 @@ class Programm:
             self.fehler = "; ".join(fehler)[:200] or "Keine Sendungen der gewählten Sender gefunden"
             _LOGGER.warning("Programmdaten nicht geladen: %s", self.fehler)
             # Den Versuch merken, damit nicht jeder Neustart sofort wieder lädt.
-            await self._store.async_save({**self._gespeichert, "versuch": time.time(), "quellen": [self.haupt_url, self.ersatz_url], "wunsch": wunsch})
+            await self._store.async_save({**self._gespeichert, "versuch": time.time(), "quellen_fp": self._quellen_fp, "wunsch": wunsch})
             return
         haupt_norm = {_norm(s) for s in haupt["alle_sender"]}
         self.alle_sender = sorted(
@@ -250,23 +262,14 @@ class Programm:
         _LOGGER.info("Programm: %d Sender (%d aus der Ersatzquelle), %d Sendungen", len(self.programm), len(self.aus_ersatz), self.sendungen)
         self._gespeichert = {
             "alle_sender": self.alle_sender, "alle_ersatz": self.alle_ersatz, "aus_ersatz": self.aus_ersatz,
-            "programm": self.programm, "stand": self.stand.isoformat(), "quellen": [self.haupt_url, self.ersatz_url],
+            "programm": self.programm, "stand": self.stand.isoformat(), "quellen_fp": self._quellen_fp,
             "wunsch": wunsch, "versuch": time.time(),
         }
         await self._store.async_save(self._gespeichert)
 
     def _reste_weg(self) -> None:
         """Dateien abgebrochener Läufe: frühere feste Namen und Laufdateien älter als eine Stunde."""
-        jetzt = time.time()
-        basis = self.hass.config.path(".storage", f"{DOMAIN}.{self.entry.entry_id}")
-        for pfad in glob.glob(glob.escape(basis) + ".*"):
-            if not pfad.endswith((".xml", ".xml.teil")):
-                continue  # z. B. der Store selbst
-            try:
-                if jetzt - os.path.getmtime(pfad) > 3600:
-                    os.remove(pfad)
-            except OSError:
-                pass
+        dateien_weg(self.hass, self.entry.entry_id, aelter_als=3600)
 
     # ------------------------------------------------------------ Abfragen
     def _sender_waehlen(self, wunsch: list[str] | None) -> list[str]:
@@ -345,3 +348,22 @@ def _datei_weg(dateien: tuple[str, ...]) -> None:
         for pfad in (datei, datei + ".teil"):
             if os.path.exists(pfad):
                 os.remove(pfad)
+
+
+def _fingerabdruck(haupt: str, ersatz: str) -> str:
+    """Erkennt eine geänderte Quelle, ohne die Adressen (samt Zugangsdaten) zu speichern."""
+    return hashlib.sha256(json.dumps([haupt, ersatz]).encode()).hexdigest()
+
+
+def dateien_weg(hass: HomeAssistant, entry_id: str, aelter_als: float | None = None) -> None:
+    """Heruntergeladene Dateien des Eintrags löschen; mit aelter_als nur ältere (Sekunden)."""
+    jetzt = time.time()
+    basis = hass.config.path(".storage", f"{DOMAIN}.{entry_id}")
+    for pfad in glob.glob(glob.escape(basis) + ".*"):
+        if not pfad.endswith((".xml", ".xml.teil")):
+            continue  # z. B. der Store selbst
+        try:
+            if aelter_als is None or jetzt - os.path.getmtime(pfad) > aelter_als:
+                os.remove(pfad)
+        except OSError:
+            pass

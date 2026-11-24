@@ -22,4 +22,4 @@ class AktualisierenKnopf(ProgrammEntitaet, ButtonEntity):
         super().__init__(programm, "aktualisieren")
 
     async def async_press(self) -> None:
-        self.hass.async_create_background_task(self._programm.async_aktualisieren(), "tv_programm_knopf")
+        self._programm.starten("knopf")
